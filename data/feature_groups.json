@@ -1,0 +1,45 @@
+{
+  "route": [
+    "bus_route",
+    "borough",
+    "gtfs_n_stops",
+    "gtfs_max_stops_per_trip",
+    "gtfs_n_directions"
+  ],
+  "supply": [
+    "sched_trips_hr",
+    "sched_headway_min",
+    "sched_trips_day"
+  ],
+  "weather": [
+    "temperature_2m",
+    "apparent_temperature",
+    "relative_humidity_2m",
+    "dew_point_2m",
+    "precipitation",
+    "snowfall",
+    "pressure_msl",
+    "cloud_cover",
+    "wind_speed_10m",
+    "wind_gusts_10m"
+  ],
+  "calendar": [
+    "hour",
+    "day_of_week",
+    "month",
+    "is_weekend",
+    "hour_sin",
+    "hour_cos",
+    "is_am_peak",
+    "is_pm_peak",
+    "is_holiday",
+    "is_school_day"
+  ],
+  "history": [
+    "lag_1h",
+    "lag_24h",
+    "lag_168h",
+    "roll_24h_mean",
+    "roll_168h_mean"
+  ]
+}
