@@ -93,7 +93,7 @@ Suggested repo layout: `data/` (or download script `build_transit_dataset.py`), 
 - [ ] Instructor approval of the topic (first-come; message them soon).
 - [ ] Ask: do engineered features count toward the 15 features?
 - [ ] Ask: one deployment or all three?
-- [ ] Decide 6 vs 16 routes (recommended 16).
+- [x] Decide 6 vs 16 routes: **16 chosen** (2026-11-06), dataset rebuilt, 21,504 rows.
 - [ ] Verify the school-calendar dates and the licence wording for each source.
 - [ ] EDA, modelling, ablation, apps, report, viva preparation (every member must be able to explain every part).
 
@@ -103,9 +103,12 @@ Suggested repo layout: `data/` (or download script `build_transit_dataset.py`), 
 - Preserve the leakage rules: fit preprocessing on training data only; lags use past values only; time-ordered splits.
 - Cite all external code, data and papers; copied work without citation scores zero.
 
-## 12. Repo status (as of 2026-10-29)
-- **Present in the repo folder:** `build_transit_dataset.py`, `data/` (`transit_dataset.csv`, `feature_groups.json`, `SOURCES.md`, `raw/`), `gtfs_zips/` (six MTA feeds, about 52 MB), `.gitignore`, `.gitattributes`, this file.
-- **Not created yet:** `notebooks/`, `app/`, `models/`, `requirements.txt`, `README.md`, any virtual environment (create a fresh one; the earlier `.venv` was left behind in another folder because virtual environments are not portable).
-- **Git:** remote is `github.com/ayanmirza99/ML-Project`. The script, `data/` and `gtfs_zips/` were moved in on 2026-10-29 and are **not committed or pushed yet**. Decide whether to commit `gtfs_zips/` (the script can re-download the feeds) or add it to `.gitignore`.
-- **Not done:** everything under section 10 "Open items" and section 8 "Modelling plan".
-- Whether the `data/` files match the latest version of the script (after the corridor de-duplication) has **not been verified**; the row count and routes in section 5 come from the earlier run.
+## 12. Repo status (as of 2026-11-06)
+- **Done:** dataset rebuilt with `N_ROUTES = 16`, `MAX_PER_BOROUGH = 4` (21,504 rows, 36 columns, no missing values; routes M15+, Q58, Q65, B6, Q27, Q25, M101, BX12+, B41, M86+, B35, B1, M4, BX9, BX19, BX36). `.venv` created with Python 3.14 (`.venv/bin/python`, git-ignored). `requirements.txt` pinned. `notebooks/01_eda.ipynb` executed, with 8 plots saved to `figures/`.
+- **EDA findings:** weekday double peak (7-8 am sharp, 5 pm broad), weekends one low midday hump; routes differ a lot in size; raw weather plot is misleading (hot/rainy hours are afternoons), and after dividing by the typical ridership for the same route-hour-daytype, rain is about -3% and freezing weather about -6% (small); Jan 20 holiday behaved like a weekend (133k vs about 200-218k on weekdays); weather columns correlate 0.95-0.99 with each other; `gtfs_n_directions` is constant.
+- **Modelling done (notebooks/02_modelling.ipynb, executed):** day-based time split 70/15/15 (train Jan 13-Jul 17, val Jul 18-Sep 19, test Sep 20-28). Baseline + Linear Regression, KNN, Random Forest, Gradient Boosting in Pipelines, GridSearchCV with TimeSeriesSplit(5), chosen on validation MAE, refit on train+val, tested once. **Test results:** planning model Random Forest MAE 53.6 / RMSE 90.2 / R2 0.94 (baseline route-hour average MAE 74.5); history model Random Forest MAE 48.0 / R2 0.95 (baseline last week MAE 66.0). Final pipelines saved to `models/planning_model.joblib` and `models/history_model.joblib`. History features help only about 10%; planning model was tested with actual (not forecast) weather. Test set is only 9 days, so small differences are noise.
+- **Ablation done (notebooks/03_ablation.ipynb):** same Random Forest, 5-fold TimeSeriesSplit CV on train+val only (test untouched). Full planning model CV MAE 69.4. Removing calendar +32 (biggest); weather +5.8; GTFS schedule +3.0; route name +0.07 (GTFS route facts also identify the route, so removing route name AND all GTFS gives +66); history features -17.5. Build-up: calendar only 134, + route name 76, + GTFS 75, + weather 69. Story: MTA ridership + calendar do most of the work; GTFS and weather are small extras. `feature_groups.json` mixes route name and GTFS route facts in group `route`, so the notebook splits them.
+- **Robustness done (notebooks/04_robustness.ipynb):** blocked split (train first 10 days of each window, test last 4 days): planning 47.3 vs baseline 63.3, history 39.3. **Leave-one-window-out: planning only about 8% better than baseline (72.6 vs 78.9; January no better), history 49.6.** **Unseen routes: planning 133 vs baseline 133 (no better).** So the 28% gain in notebook 02 depends on having seen similar seasons; the app must only offer the 16 trained routes. Option to improve: more windows (e.g. 8) in the builder.
+- `notebooks/utils.py` holds shared helpers for notebooks 03-04 (notebook 02 keeps its own copies).
+- **Git:** original script, data and `gtfs_zips/` are committed and pushed. Everything from 2026-11-06 (rebuilt data, notebooks, figures, models, `requirements.txt`) is **not committed yet**; the user said not to commit until they ask.
+- **Not done:** apps, README, report, all other open items in section 10.

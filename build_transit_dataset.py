@@ -71,8 +71,8 @@ WINDOWS = [
     ("2025-09-15", "2025-09-28"),   # autumn, Rosh Hashanah closure
 ]
 WARMUP_DAYS = 7
-N_ROUTES = 6              # 6 routes x 14 days x 24 h x 4 windows = 8,064 final rows
-MAX_PER_BOROUGH = 2       # spread the chosen routes over several boroughs
+N_ROUTES = 16             # 16 routes x 14 days x 24 h x 4 windows = 21,504 final rows
+MAX_PER_BOROUGH = 4       # spread the chosen routes over several boroughs
 ROUTE_PICK_WINDOW = 1     # which window is used to rank routes by ridership
 N_CANDIDATES = 60         # how many top routes to consider
 
