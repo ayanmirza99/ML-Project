@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TransitPulse</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+  label { display: block; margin-top: 0.8rem; font-weight: 600; }
+  input, select { padding: 0.4rem; width: 100%; box-sizing: border-box; }
+  .row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6rem; }
+  button { margin-top: 1rem; padding: 0.6rem 1.2rem; font-size: 1rem; cursor: pointer; }
+  #result { margin-top: 1.5rem; font-size: 1.3rem; }
+  #error { margin-top: 1rem; color: #b00020; font-weight: 600; }
+  canvas { width: 100%; margin-top: 1rem; border: 1px solid #ddd; }
+  small { color: #555; }
+</style>
+</head>
+<body>
+<h1>TransitPulse</h1>
+<p>Predict hourly bus ridership for one MTA route in New York.</p>
+
+<label for="route">Route</label>
+<select id="route"></select>
+
+<div class="row">
+  <div><label for="date">Date</label><input id="date" type="date"></div>
+  <div><label for="hour">Hour (0-23)</label><input id="hour" type="number" min="0" max="23" value="8"></div>
+</div>
+
+<label><input type="checkbox" id="customWeather" style="width:auto"> Enter weather myself (otherwise the recorded weather for that date is used)</label>
+<div class="row" id="weatherBox" hidden>
+  <div><label for="temperature_2m">Temp (C)</label><input id="temperature_2m" type="number" step="0.1" value="15"></div>
+  <div><label for="precipitation">Rain (mm/h)</label><input id="precipitation" type="number" step="0.1" value="0"></div>
+  <div><label for="snowfall">Snow (cm/h)</label><input id="snowfall" type="number" step="0.1" value="0"></div>
+  <div><label for="wind_speed_10m">Wind (km/h)</label><input id="wind_speed_10m" type="number" step="0.1" value="10"></div>
+</div>
+
+<button id="go">Predict</button>
+<div id="error"></div>
+<div id="result"></div>
+<canvas id="chart" width="720" height="300" hidden></canvas>
+<p><small>The model was trained on 2025 data (January to September), so only dates in that period are accepted.</small></p>
+
+<script>
+const $ = id => document.getElementById(id);
+
+fetch("/routes").then(r => r.json()).then(info => {
+  $("route").innerHTML = info.routes.map(r => `<option>${r}</option>`).join("");
+  $("date").min = info.first_date;
+  $("date").max = info.last_date;
+  $("date").value = info.default_date;
+});
+
+$("customWeather").addEventListener("change", e => { $("weatherBox").hidden = !e.target.checked; });
+
+function drawChart(profile, chosenHour) {
+  const canvas = $("chart"), ctx = canvas.getContext("2d");
+  const max = Math.max(...profile.map(p => p.predicted_riders), 1);
+  const w = canvas.width / 24;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  profile.forEach(p => {
+    const h = (p.predicted_riders / max) * (canvas.height - 40);
+    ctx.fillStyle = p.hour === chosenHour ? "#d9480f" : "#4c72b0";
+    ctx.fillRect(p.hour * w + 3, canvas.height - 20 - h, w - 6, h);
+    ctx.fillStyle = "#222";
+    ctx.font = "11px sans-serif";
+    ctx.fillText(p.hour, p.hour * w + w / 2 - 5, canvas.height - 6);
+  });
+  canvas.hidden = false;
+}
+
+$("go").addEventListener("click", async () => {
+  $("error").textContent = "";
+  $("result").textContent = "";
+  const body = { route: $("route").value, date: $("date").value, hour: parseInt($("hour").value, 10) };
+  if ($("customWeather").checked) {
+    body.weather = {};
+    ["temperature_2m", "precipitation", "snowfall", "wind_speed_10m"].forEach(k => { body.weather[k] = parseFloat($(k).value); });
+  }
+  if (Number.isNaN(body.hour)) { $("error").textContent = "Hour must be a whole number from 0 to 23."; return; }
+  try {
+    const response = await fetch("/predict", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await response.json();
+    if (!response.ok) { $("error").textContent = data.error; $("chart").hidden = true; return; }
+    $("result").textContent = `Predicted riders on ${data.route} at ${data.hour}:00 on ${data.date}: ${data.predicted_riders}`;
+    drawChart(data.daily_profile, data.hour);
+  } catch (e) {
+    $("error").textContent = "Could not reach the server. Is it running?";
+  }
+});
+</script>
+</body>
+</html>

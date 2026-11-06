@@ -38,20 +38,20 @@ Tormenta (geomagnetic Kp from solar wind); KaarWala (used-car prices Pakistan); 
 
 **Source 3: Open-Meteo historical weather** (archive API, New York City coordinates 40.7128, -74.0060, timezone America/New_York). 10 variables: temperature, apparent temperature, relative humidity, dew point, precipitation, snowfall, pressure, cloud cover, wind speed, wind gusts. Units: degC, %, mm, cm, hPa, km/h. One city-wide value per hour (simplification). Check Open-Meteo's terms for the licence wording.
 
-**Calendar features:** US/NY holidays from the Python `holidays` package; `is_school_day` from a **hand-typed, approximate NYC school calendar** in the script (verify at schools.nyc.gov).
+**Calendar features:** US **federal** holidays from the Python `holidays` package (NY state-only observances such as Lincoln's Birthday are excluded: ridership on those days was normal); `is_school_day` from a **hand-typed, approximate NYC school calendar** in the script (verify at schools.nyc.gov).
 
 ## 5. The dataset builder: `build_transit_dataset.py`
 Run: `pip install pandas numpy requests holidays`, then `python build_transit_dataset.py` (options: `--no-gtfs`, `--ref-date YYYY-MM-DD`). Output folder `data/`:
 `transit_dataset.csv` (the modelling table), `feature_groups.json` (columns per group for ablations), `SOURCES.md` (provenance for the report), `raw/mta_ridership_raw.csv`, `raw/weather_raw.csv`, `raw/gtfs_supply_table.csv`.
 
 Design choices:
-- **Four 2-week windows** (2025-01-13 to 01-26 winter, 04-07 to 04-20 spring, 07-07 to 07-20 summer, 09-15 to 09-28 autumn) so weather, holidays and school days vary. Each is fetched with **7 extra warm-up days** used only for lag features, then dropped.
-- `N_ROUTES = 6` busiest routes, at most `MAX_PER_BOROUGH = 2` per borough, only routes that match a GTFS route; variants of the same corridor (`M15` / `M15+`) are not both chosen. Ranking uses the spring window.
+- **Eight 2-week windows** in 2025 (Jan 13-26, Feb 10-23, Apr 7-20, May 19-Jun 1, Jun 9-22, Jul 7-20, Aug 25-Sep 7, Sep 15-28), chosen to include MLK Day, Presidents Day, Memorial Day, Juneteenth and Labor Day and to stay inside the typed school calendar (Jan-Sep). Each is fetched with **7 extra warm-up days** used only for lag features, then dropped.
+- `N_ROUTES = 24` busiest routes, at most `MAX_PER_BOROUGH = 6` per borough, only routes that match a GTFS route; variants of the same corridor (`M15` / `M15+`) are not both chosen. Ranking uses the April window (`ROUTE_PICK_WINDOW = 2`). Chosen: M15+, Q58, Q65, B6, Q27, Q25, M101, Q44+, BX12+, B41, M86+, Q10, B35, B1, M4, M14D+, B38, BX9, BX19, B8, M96, BX36, S79+, BX7.
 - Hours with no API row are filled with 0 riders (assumption; state in the report).
 - Lag/rolling features are computed **per route per window using only past values** (shift before rolling). Verified: `lag_24h` equals ridership 24 hours earlier.
 - Times are NYC local, naive timestamps; weather is joined on the exact hour.
 
-Last real run (before the corridor de-duplication): 8,064 rows, 36 columns (33 features + target `ridership`, plus `transit_timestamp` and `window_id`), no missing values. Routes then: M15+, Q58, Q65, B6, M15, BX12+.
+Current dataset (rebuilt 2026-11-06): **64,512 rows, 36 columns** (33 features + target `ridership`, plus `transit_timestamp` and `window_id`), 24 routes x 8 windows, no missing values, no duplicate route-hours, `lag_24h` verified equal to ridership 24 h earlier.
 
 ## 6. Feature groups (for the source-contribution analysis)
 | Group | Columns |
@@ -93,9 +93,10 @@ Suggested repo layout: `data/` (or download script `build_transit_dataset.py`), 
 - [ ] Instructor approval of the topic (first-come; message them soon).
 - [ ] Ask: do engineered features count toward the 15 features?
 - [ ] Ask: one deployment or all three?
-- [x] Decide 6 vs 16 routes: **16 chosen** (2026-11-06), dataset rebuilt, 21,504 rows.
+- [x] Decide route count: first 16, then **24 routes and 8 windows** (2026-11-06), 64,512 rows.
 - [ ] Verify the school-calendar dates and the licence wording for each source.
-- [ ] EDA, modelling, ablation, apps, report, viva preparation (every member must be able to explain every part).
+- [x] EDA, modelling, ablation, robustness checks and local apps are done (see section 12).
+- [ ] README, report, live deployments, demo and viva preparation (every member must be able to explain every part).
 
 ## 11. Working agreements for Claude
 - Teammates include non-technical people: explain in simple English when asked.
@@ -104,11 +105,21 @@ Suggested repo layout: `data/` (or download script `build_transit_dataset.py`), 
 - Cite all external code, data and papers; copied work without citation scores zero.
 
 ## 12. Repo status (as of 2026-11-06)
-- **Done:** dataset rebuilt with `N_ROUTES = 16`, `MAX_PER_BOROUGH = 4` (21,504 rows, 36 columns, no missing values; routes M15+, Q58, Q65, B6, Q27, Q25, M101, BX12+, B41, M86+, B35, B1, M4, BX9, BX19, BX36). `.venv` created with Python 3.14 (`.venv/bin/python`, git-ignored). `requirements.txt` pinned. `notebooks/01_eda.ipynb` executed, with 8 plots saved to `figures/`.
-- **EDA findings:** weekday double peak (7-8 am sharp, 5 pm broad), weekends one low midday hump; routes differ a lot in size; raw weather plot is misleading (hot/rainy hours are afternoons), and after dividing by the typical ridership for the same route-hour-daytype, rain is about -3% and freezing weather about -6% (small); Jan 20 holiday behaved like a weekend (133k vs about 200-218k on weekdays); weather columns correlate 0.95-0.99 with each other; `gtfs_n_directions` is constant.
-- **Modelling done (notebooks/02_modelling.ipynb, executed):** day-based time split 70/15/15 (train Jan 13-Jul 17, val Jul 18-Sep 19, test Sep 20-28). Baseline + Linear Regression, KNN, Random Forest, Gradient Boosting in Pipelines, GridSearchCV with TimeSeriesSplit(5), chosen on validation MAE, refit on train+val, tested once. **Test results:** planning model Random Forest MAE 53.6 / RMSE 90.2 / R2 0.94 (baseline route-hour average MAE 74.5); history model Random Forest MAE 48.0 / R2 0.95 (baseline last week MAE 66.0). Final pipelines saved to `models/planning_model.joblib` and `models/history_model.joblib`. History features help only about 10%; planning model was tested with actual (not forecast) weather. Test set is only 9 days, so small differences are noise.
-- **Ablation done (notebooks/03_ablation.ipynb):** same Random Forest, 5-fold TimeSeriesSplit CV on train+val only (test untouched). Full planning model CV MAE 69.4. Removing calendar +32 (biggest); weather +5.8; GTFS schedule +3.0; route name +0.07 (GTFS route facts also identify the route, so removing route name AND all GTFS gives +66); history features -17.5. Build-up: calendar only 134, + route name 76, + GTFS 75, + weather 69. Story: MTA ridership + calendar do most of the work; GTFS and weather are small extras. `feature_groups.json` mixes route name and GTFS route facts in group `route`, so the notebook splits them.
-- **Robustness done (notebooks/04_robustness.ipynb):** blocked split (train first 10 days of each window, test last 4 days): planning 47.3 vs baseline 63.3, history 39.3. **Leave-one-window-out: planning only about 8% better than baseline (72.6 vs 78.9; January no better), history 49.6.** **Unseen routes: planning 133 vs baseline 133 (no better).** So the 28% gain in notebook 02 depends on having seen similar seasons; the app must only offer the 16 trained routes. Option to improve: more windows (e.g. 8) in the builder.
-- `notebooks/utils.py` holds shared helpers for notebooks 03-04 (notebook 02 keeps its own copies).
-- **Git:** original script, data and `gtfs_zips/` are committed and pushed. Everything from 2026-11-06 (rebuilt data, notebooks, figures, models, `requirements.txt`) is **not committed yet**; the user said not to commit until they ask.
-- **Not done:** apps, README, report, all other open items in section 10.
+- **Nothing is committed yet from 2026-11-06 onward** (the user said not to commit until asked). Remote: `github.com/ayanmirza99/ML-Project`.
+- **Environment:** `.venv` (Python 3.14, git-ignored), `requirements.txt` pinned (fastapi, holidays, joblib, matplotlib, numpy, pandas, requests, scikit-learn, seaborn, streamlit, uvicorn). Flask is not used.
+- **Data:** rebuilt with 8 windows, 24 routes, federal holidays (see section 5). `data/` and `gtfs_zips/` committed earlier; new `data/` files are uncommitted changes.
+- **Notebooks (all executed), shared helpers in `notebooks/utils.py`:**
+  - `01_eda.ipynb`: 9 sections, 9+ plots in `figures/`. Hour profile (weekday peaks 7-8 am and 4-5 pm, weekend hump at 2 pm); raw weather plot is misleading (hot/rainy hours are afternoons), adjusted for route-hour-daytype rain is about -1%, freezing about -7%; all 5 holidays have fewer riders than any normal weekday; **Q10, Q65, Q58 fell 32-39% and Q25 rose 32% between June and late August, 16 of 24 routes stayed within 5%** (cause not verified).
+  - `02_modelling.ipynb`: day-based split (train Jan 13-Jul 14, val Jul 15-Sep 4, test Sep 5-28 = 17 days), baselines, Linear, KNN, Random Forest, HistGradientBoosting and an RF+GB average, GridSearchCV with TimeSeriesSplit(5), choose on validation among models **under 50 MB** (RF is about 110 MB compressed, over GitHub's 100 MB limit), refit on train+val, test once. **Test (planning, deployed): Gradient Boosting MAE 65.4, RMSE 113.3, R2 0.92 vs baseline 78.0 (16% better; 14.5% of the average 450 riders). History model: MAE 39.0, R2 0.97 vs baseline 54.1.** RF 64.0 and average 63.9 are within noise. Planning error is concentrated in four Queens routes (MAE 158 vs 47 elsewhere).
+  - `03_ablation.ipynb` (tuned boosting, 5-fold TimeSeriesSplit CV on train+val only; full planning CV MAE 55.0): minus calendar +47.3; minus route name +0.8 (GTFS also identifies the route); minus route name and all GTFS +74; minus schedule +2.8; minus weather +2.9; history model -13.6. Build-up: calendar only 126, + route name 60, + GTFS 58, + weather 55. Story: ridership data and calendar do most of the work; GTFS and weather add a few percent.
+  - `04_robustness.ipynb`: blocked split planning 49.2 vs baseline 59.6; leave-one-window-out planning 53.0 vs 68.9 (beats baseline in 7 of 8 windows, history 36.6); unseen routes planning 111 vs baseline 132 (about 24% of average ridership).
+  - `05_improvements.ipynb`: leave-one-window-out with Random Forest. Fewer weather columns (keep temperature, precipitation, snowfall, wind speed) adopted (52.7 vs 53.9; better in 7 of 8 windows). Typical-ridership feature rejected (worse). Dropped columns are in `utils.WEATHER_DROPPED`.
+- **Models:** `models/planning_model.joblib` and `models/history_model.joblib` (Gradient Boosting, 1.5 MB each, saved with compress=3).
+- **Apps (built, tested locally only; none deployed):**
+  - `app/features.py` shared core (validation, builds the model's input row for a route/date/weather; verified to reproduce dataset rows exactly), `app/prepare_lookups.py` builds `app/lookup/*.csv`.
+  - `app/api.py` + `app/index.html`: local FastAPI with HTML front end, `POST /predict`, `GET /routes`, `GET /health`, input validation with clear 400 messages (tested with 10 bad-input cases). Run: `cd app && ../.venv/bin/uvicorn api:app --port 8000`.
+  - `app/streamlit_app.py`: Streamlit app (tested headless with `AppTest`). Streamlit Community Cloud is **not set up**.
+  - `app/build_hf_space.py` builds `hf_space/` (Space files, `app.py`, pinned requirements, Space README) and `hf_model/` (model card + model file). **Nothing has been pushed to Hugging Face.**
+  - Supported dates: 2025-01-06 to 2025-09-28 only (model and weather coverage); the 24 trained routes only.
+- **Known app caveat:** entering extreme weather on a date from another season changes the prediction a lot because weather also hints at the season (e.g. -10 C on a September date raised Q58 by about 22%).
+- **Not done:** README, report (3-4 pages), demo and viva preparation, deploying the three apps live (Streamlit Cloud public URL, Hugging Face Space and model repo, local FastAPI demo), instructor questions, verifying school calendar and licences, spot-check of GTFS counts against published timetables.

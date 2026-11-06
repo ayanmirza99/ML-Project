@@ -6,7 +6,7 @@ Predict hourly bus ridership per route from:
   SOURCE 1  MTA Bus Hourly Ridership (data.ny.gov)      -> target + route/time + past demand
   SOURCE 2  MTA GTFS static schedule (service supply)   -> scheduled trips/hour, headway, stops
   SOURCE 3  Open-Meteo historical weather               -> context
-  plus      US/NY holidays (python 'holidays' package) and a hand-typed NYC school calendar
+  plus      US federal holidays (python 'holidays' package) and a hand-typed NYC school calendar
 
 Install:   pip install pandas numpy requests holidays
 Run:       python build_transit_dataset.py
@@ -61,19 +61,24 @@ COL_ROUTE = "bus_route"
 COL_TIME = "transit_timestamp"
 COL_RIDERS = "ridership"
 
-# Four 2-week windows spread over the year (winter / spring / summer / autumn) so that
-# weather, holidays and school days actually vary. Each window is fetched with 7 extra
-# days BEFORE it; those warm-up days are used only to compute lag features, then dropped.
+# Eight 2-week windows spread over Jan-Sep 2025 so that weather, seasons, holidays and school days
+# vary. Each window is fetched with 7 extra days BEFORE it; those warm-up days are used only to
+# compute lag features, then dropped. (Windows stop in September because the hand-typed school
+# calendar below only covers up to then.)
 WINDOWS = [
     ("2025-01-13", "2025-01-26"),   # winter, MLK Day
+    ("2025-02-10", "2025-02-23"),   # winter, Presidents Day, school mid-winter recess
     ("2025-04-07", "2025-04-20"),   # spring, school spring recess
+    ("2025-05-19", "2025-06-01"),   # late spring, Memorial Day
+    ("2025-06-09", "2025-06-22"),   # early summer, Juneteenth, schools still open
     ("2025-07-07", "2025-07-20"),   # summer, schools closed
+    ("2025-08-25", "2025-09-07"),   # end of summer, Labor Day, schools reopen
     ("2025-09-15", "2025-09-28"),   # autumn, Rosh Hashanah closure
 ]
 WARMUP_DAYS = 7
-N_ROUTES = 16             # 16 routes x 14 days x 24 h x 4 windows = 21,504 final rows
-MAX_PER_BOROUGH = 4       # spread the chosen routes over several boroughs
-ROUTE_PICK_WINDOW = 1     # which window is used to rank routes by ridership
+N_ROUTES = 24             # 24 routes x 14 days x 24 h x 8 windows = 64,512 final rows
+MAX_PER_BOROUGH = 6       # spread the chosen routes over several boroughs
+ROUTE_PICK_WINDOW = 2     # which window is used to rank routes by ridership
 N_CANDIDATES = 60         # how many top routes to consider
 
 # Hourly weather variables (Open-Meteo names). If the full list is rejected, the core list is used.
@@ -518,11 +523,8 @@ def school_closed_dates():
     return days
 
 
-def us_ny_holidays(years):
-    try:
-        return holidays.country_holidays("US", subdiv="NY", years=years)
-    except Exception:
-        return holidays.US(years=years)
+def us_federal_holidays(years):
+    return holidays.country_holidays("US", years=years)   # NY state-only days (Lincoln's Birthday etc.) do not change bus service
 
 
 # ------------------------------ feature building -----------------------------
@@ -558,7 +560,7 @@ def build_dataset(raw, chosen, supply, weather, weather_vars):
     df["hour_cos"] = np.cos(2 * np.pi * df["hour"] / 24)
     df["is_am_peak"] = df["hour"].between(7, 9).astype(int)
     df["is_pm_peak"] = df["hour"].between(16, 19).astype(int)
-    hol = us_ny_holidays(sorted(t.dt.year.unique().tolist()))
+    hol = us_federal_holidays(sorted(t.dt.year.unique().tolist()))
     df["is_holiday"] = t.dt.date.isin(set(hol.keys())).astype(int)
     closed = school_closed_dates()
     df["is_school_day"] = ((df["day_of_week"] < 5) & ~t.dt.date.isin(closed)).astype(int)
@@ -623,7 +625,7 @@ def write_sources(df, groups, used_gtfs, chosen, weather_vars):
         f"- Variables: {', '.join(weather_vars)}",
         "- Licence: check https://open-meteo.com/en/terms and cite accordingly.", "",
         "## Calendar features",
-        "- Holidays: Python `holidays` package (US, NY subdivision)",
+        "- Holidays: Python `holidays` package (US federal holidays only; NY state observances such as Lincoln's Birthday are excluded because ridership on those days is normal)",
         "- School days: hand-typed from the NYC public school calendar (https://schools.nyc.gov); verify dates.", "",
         "## Final dataset",
         f"- Rows: {len(df)}; columns: {df.shape[1]}; features: {df.shape[1] - 3} "
