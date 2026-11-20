@@ -82,4 +82,4 @@ The saved models are in `models/` (the apps load `models/planning_model.joblib`)
 
 ## Repository layout
 `build_transit_dataset.py` data builder | `data/` dataset and sources | `gtfs_zips/` schedule feeds | `notebooks/` analysis | `figures/` plots |
-`models/` saved pipelines | `app/` apps and shared code | `hf_space/`, `hf_model/` generated Hugging Face files | `CLAUDE.md` project notes.
+`models/` saved pipelines | `app/` apps and shared code | `hf_space/`, `hf_model/` generated Hugging Face files | `report/` project report (Word) | `CLAUDE.md` project notes.
