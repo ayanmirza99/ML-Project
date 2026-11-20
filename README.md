@@ -3,7 +3,11 @@
 Predicts **hourly bus ridership per route** for transport planners, using MTA (New York) data.
 CT-378 Machine Learning, Fall 2026 semester project. Data is from New York because Karachi has no public passenger-count data.
 
-**Live links:** not deployed yet (Streamlit Community Cloud, Hugging Face Space and model repo: to be added here).
+**Live links:**
+- Streamlit app: https://ml-project-wuwhhjv3aqsnuxh5x5tdwi.streamlit.app/
+- Hugging Face model card: https://huggingface.co/ayanjawed/transitpulse-planning-model
+- Hugging Face Space: to be added
+- Local FastAPI app with `/predict`: see "Run the apps locally" below
 
 ## Data (three sources)
 1. MTA Bus Hourly Ridership: Beginning 2025 (NY Open Data, dataset `gxb3-akrn`), through the Socrata API.

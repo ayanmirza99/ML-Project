@@ -12,6 +12,9 @@ license: other
 Predicts **hourly bus ridership for one route** (riders per route-hour) from information known in advance:
 route, date, hour, schedule and weather. Built for transport planners as a CT-378 Machine Learning course project.
 
+- Live demo (Hugging Face Space): https://huggingface.co/spaces/ayanjawed/TransitPulse
+- Code, data builder and notebooks: https://github.com/ayanmirza99/ML-Project
+
 ## Intended use
 - What-if planning for the 24 MTA bus routes it was trained on, for dates from 2025-01-06 to 2025-09-28.
 - **Not** for other routes, other cities or dates outside that period (see Limitations).

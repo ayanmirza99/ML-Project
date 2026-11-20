@@ -15,4 +15,6 @@ pinned: false
 Predict hourly bus ridership for 24 MTA routes in New York (January to September 2025).
 Pick a route, a date and an hour; the app shows the predicted riders and the predicted profile for the whole day.
 
-Model card: see the model repository. Course project for CT-378 Machine Learning.
+Model card: https://huggingface.co/ayanjawed/transitpulse-planning-model
+Code: https://github.com/ayanmirza99/ML-Project
+Course project for CT-378 Machine Learning.
