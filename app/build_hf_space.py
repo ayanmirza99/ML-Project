@@ -1,57 +1,52 @@
+"""Build the Hugging Face files: hf_space/ (the Space) and hf_model/ (model card and model file).
+
+Hugging Face now needs a paid plan for Spaces that run Python (Docker or Gradio); static Spaces are free.
+So the Space is a static web page that runs the same model in the visitor's browser:
+the 500 trees of models/planning_model.joblib are exported to model.json, the lookup tables to data.json,
+and app/static_space/predict.js adds up the trees like scikit-learn does.
+Run app/verify_static_space.py afterwards to check that the browser predictions match the Python model.
+"""
+import json
 import shutil
+import sys
 from pathlib import Path
+
+import joblib
+import numpy as np
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "app"
 SPACE = ROOT / "hf_space"
 MODEL_REPO = ROOT / "hf_model"
+MODEL_FILE = ROOT / "models" / "planning_model.joblib"
 
-# Hugging Face retired the built-in Streamlit SDK on 2025-04-30, so the Space runs Streamlit inside Docker.
+sys.path.insert(0, str(APP))
+import features  # noqa: E402  (shared with the Streamlit and FastAPI apps)
+
 SPACE_README = """---
 title: TransitPulse
 emoji: 🚌
 colorFrom: blue
 colorTo: indigo
-sdk: docker
-app_port: 8501
-tags:
-  - streamlit
+sdk: static
+app_file: index.html
 pinned: false
+short_description: Hourly bus ridership predictions for 24 NYC bus routes
 ---
 
 # TransitPulse
 
 Predict hourly bus ridership for 24 MTA routes in New York (January to September 2025).
-Pick a route, a date and an hour; the app shows the predicted riders and the predicted profile for the whole day.
+Pick a route, a date and an hour; the page shows the predicted riders and the predicted profile for the whole day.
+
+This is a static Space: the Gradient Boosting model runs in your browser. Its 500 trees were exported from
+scikit-learn to `model.json`, and `predict.js` adds them up exactly like scikit-learn; the predictions were
+checked to be identical to the Python model.
 
 Model card: https://huggingface.co/ayanjawed/transitpulse-planning-model
 Code: https://github.com/ayanmirza99/ML-Project
 Course project for CT-378 Machine Learning.
-"""
-
-SPACE_REQUIREMENTS = """streamlit==1.67.0
-pandas==3.1.1
-numpy==2.5.4
-scikit-learn==1.9.1
-joblib==1.6.0
-holidays==0.108
-"""
-
-# Python 3.14 matches the local .venv the app was tested with (numpy 2.5 needs Python 3.12 or newer).
-# Spaces run the container as user 1000, so the app gets its own home folder (Streamlit writes ~/.streamlit).
-SPACE_DOCKERFILE = """FROM python:3.14-slim
-
-RUN useradd -m -u 1000 user
-USER user
-ENV HOME=/home/user PATH=/home/user/.local/bin:$PATH
-WORKDIR /home/user/app
-
-COPY --chown=user requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY --chown=user . .
-
-EXPOSE 8501
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0", "--browser.gatherUsageStats=false"]
 """
 
 MODEL_CARD = """---
@@ -68,7 +63,8 @@ license: other
 Predicts **hourly bus ridership for one route** (riders per route-hour) from information known in advance:
 route, date, hour, schedule and weather. Built for transport planners as a CT-378 Machine Learning course project.
 
-- Live demo (Hugging Face Space): https://huggingface.co/spaces/ayanjawed/TransitPulse
+- Live demo (Hugging Face Space, runs the model in the browser): https://huggingface.co/spaces/ayanjawed/TransitPulse
+- Live demo (Streamlit): https://ml-project-wuwhhjv3aqsnuxh5x5tdwi.streamlit.app/
 - Code, data builder and notebooks: https://github.com/ayanmirza99/ML-Project
 
 ## Intended use
@@ -119,23 +115,92 @@ Other checks: leave-one-window-out MAE 53.0 vs baseline 68.9; unseen routes MAE 
 import joblib
 model = joblib.load("planning_model.joblib")  # needs scikit-learn 1.9.1
 ```
-The input row must contain the columns listed above (see `features.py` in the project repository).
+The input row must contain the columns listed above (see `app/features.py` in the project repository).
 """
 
-for folder in (SPACE, MODEL_REPO):
-    if folder.exists():
-        shutil.rmtree(folder)
-    folder.mkdir()
 
-shutil.copy(APP / "streamlit_app.py", SPACE / "app.py")
-shutil.copy(APP / "features.py", SPACE / "features.py")
-shutil.copytree(APP / "lookup", SPACE / "lookup")
-shutil.copy(ROOT / "models" / "planning_model.joblib", SPACE / "planning_model.joblib")
-(SPACE / "README.md").write_text(SPACE_README, encoding="utf-8")
-(SPACE / "requirements.txt").write_text(SPACE_REQUIREMENTS, encoding="utf-8")
-(SPACE / "Dockerfile").write_text(SPACE_DOCKERFILE, encoding="utf-8")
+def export_model(model):
+    """The pipeline as plain numbers: one-hot categories, numeric column order and every tree node."""
+    prep, booster = model.named_steps["prep"], model.named_steps["model"]
+    (_, onehot, cat_columns), (_, _, num_columns) = prep.transformers_[:2]
+    # The browser code assumes a single regression output and no native categorical splits; stop if that changes.
+    assert booster.n_trees_per_iteration_ == 1 and booster.is_categorical_ is None
+    assert list(prep.get_feature_names_out())[-len(num_columns):] == [f"num__{c}" for c in num_columns]
 
-shutil.copy(ROOT / "models" / "planning_model.joblib", MODEL_REPO / "planning_model.joblib")
-(MODEL_REPO / "README.md").write_text(MODEL_CARD, encoding="utf-8")
+    trees = []
+    # _predictors and _baseline_prediction are scikit-learn internals (checked with scikit-learn 1.9.1).
+    for (predictor,) in booster._predictors:
+        nodes = predictor.nodes
+        leaf = nodes["is_leaf"].astype(bool)
+        trees.append({
+            "feature": np.where(leaf, -1, nodes["feature_idx"]).tolist(),
+            "threshold": np.where(leaf, 0.0, nodes["num_threshold"]).tolist(),
+            "left": nodes["left"].tolist(),
+            "right": nodes["right"].tolist(),
+            "missing_left": nodes["missing_go_to_left"].tolist(),
+            "value": np.where(leaf, nodes["value"], 0.0).tolist(),
+        })
+    return {
+        "baseline": float(booster._baseline_prediction[0][0]),
+        "onehot": [[column, [str(c) for c in cats]] for column, cats in zip(cat_columns, onehot.categories_)],
+        "numeric": list(num_columns),
+        "trees": trees,
+    }
 
-print("built", SPACE, "and", MODEL_REPO)
+
+def export_data():
+    """Lookup tables for the browser, taken from app/features.py so both apps use the same values."""
+    route_info = features.routes.reset_index()
+    schedule_columns = list(features.schedule.columns)
+    first_route = features.ROUTES[0]
+    calendar, weather = {}, {}
+    hour_sin = hour_cos = None
+    for day in pd.date_range(features.FIRST_DATE, features.LAST_DATE):
+        rows = features.day_features(first_route, day)
+        key = str(day.date())
+        calendar[key] = {column: int(rows[column].iloc[0]) for column in ("day_of_week", "is_holiday", "is_school_day")}
+        weather[key] = {column: rows[column].astype(float).tolist() for column in features.WEATHER_LIMITS}
+        hour_sin, hour_cos = rows["hour_sin"].tolist(), rows["hour_cos"].tolist()
+    schedule = {
+        route: {day_type: features.schedule.loc[route, day_type].sort_index()[schedule_columns].to_numpy().tolist()
+                for day_type in ("weekday", "saturday", "sunday")}
+        for route in features.ROUTES
+    }
+    return {
+        "route_names": features.ROUTES,
+        "routes": {r["bus_route"]: {k: (v.item() if hasattr(v, "item") else v) for k, v in r.items() if k != "bus_route"}
+                   for r in route_info.to_dict("records")},
+        "schedule_columns": schedule_columns,
+        "schedule": schedule,
+        "calendar": calendar,
+        "weather": weather,
+        "weather_limits": {k: list(v) for k, v in features.WEATHER_LIMITS.items()},
+        "hour_sin": hour_sin,
+        "hour_cos": hour_cos,
+        "first_date": str(features.FIRST_DATE.date()),
+        "last_date": str(features.LAST_DATE.date()),
+        "default_date": str(features.DEFAULT_DATE.date()),
+    }
+
+
+def write_json(path, obj):
+    path.write_text(json.dumps(obj, separators=(",", ":"), allow_nan=False), encoding="utf-8")
+
+
+if __name__ == "__main__":
+    for folder in (SPACE, MODEL_REPO):
+        if folder.exists():
+            shutil.rmtree(folder)
+        folder.mkdir()
+
+    model = joblib.load(MODEL_FILE)
+    shutil.copy(APP / "static_space" / "index.html", SPACE / "index.html")
+    shutil.copy(APP / "static_space" / "predict.js", SPACE / "predict.js")
+    write_json(SPACE / "model.json", export_model(model))
+    write_json(SPACE / "data.json", export_data())
+    (SPACE / "README.md").write_text(SPACE_README, encoding="utf-8")
+
+    shutil.copy(MODEL_FILE, MODEL_REPO / "planning_model.joblib")
+    (MODEL_REPO / "README.md").write_text(MODEL_CARD, encoding="utf-8")
+
+    print("built", SPACE, "and", MODEL_REPO)

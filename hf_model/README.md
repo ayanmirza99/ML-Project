@@ -12,7 +12,8 @@ license: other
 Predicts **hourly bus ridership for one route** (riders per route-hour) from information known in advance:
 route, date, hour, schedule and weather. Built for transport planners as a CT-378 Machine Learning course project.
 
-- Live demo (Hugging Face Space): https://huggingface.co/spaces/ayanjawed/TransitPulse
+- Live demo (Hugging Face Space, runs the model in the browser): https://huggingface.co/spaces/ayanjawed/TransitPulse
+- Live demo (Streamlit): https://ml-project-wuwhhjv3aqsnuxh5x5tdwi.streamlit.app/
 - Code, data builder and notebooks: https://github.com/ayanmirza99/ML-Project
 
 ## Intended use
@@ -63,4 +64,4 @@ Other checks: leave-one-window-out MAE 53.0 vs baseline 68.9; unseen routes MAE 
 import joblib
 model = joblib.load("planning_model.joblib")  # needs scikit-learn 1.9.1
 ```
-The input row must contain the columns listed above (see `features.py` in the project repository).
+The input row must contain the columns listed above (see `app/features.py` in the project repository).

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TransitPulse</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --ink: #1f2933; --muted: #52606d; --line: #d9e2ec; --accent: #d9480f; --bar: #4c72b0; --bg: #ffffff; --panel: #f5f7fa; --error: #b00020; }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e4e7eb; --muted: #9aa5b1; --line: #3e4c59; --accent: #ff8a4c; --bar: #7da2e0; --bg: #14181d; --panel: #1f262e; --error: #ff6b81; }
+  }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 780px; margin: 0 auto; padding: 1.5rem 16px 3rem; color: var(--ink); background: var(--bg); line-height: 1.5; }
+  h1 { margin: 0 0 0.2rem; font-size: 1.8rem; }
+  .lead { margin: 0 0 1.2rem; color: var(--muted); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1rem; }
+  label { display: block; margin-top: 0.7rem; font-weight: 600; font-size: 0.92rem; }
+  input, select, button { font: inherit; }
+  input, select { padding: 0.45rem; width: 100%; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.7rem; }
+  .check { display: flex; gap: 0.5rem; align-items: center; font-weight: 400; margin-top: 1rem; }
+  .check input { width: auto; }
+  button { margin-top: 1rem; padding: 0.6rem 1.4rem; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  #error { margin-top: 1rem; color: var(--error); font-weight: 600; }
+  #result { margin-top: 1.4rem; }
+  .big { font-size: 2.4rem; font-weight: 700; line-height: 1.1; }
+  .sub { color: var(--muted); }
+  canvas { display: block; width: 100%; height: 260px; margin-top: 1rem; }
+  footer { margin-top: 2rem; font-size: 0.9rem; color: var(--muted); }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<h1>🚌 TransitPulse</h1>
+<p class="lead">Predict hourly bus ridership for one MTA bus route in New York, to help planners decide where buses are needed.</p>
+
+<div class="panel">
+  <label for="route">Route</label>
+  <select id="route" disabled><option>Loading the model…</option></select>
+
+  <div class="grid">
+    <div><label for="date">Date</label><input id="date" type="date"></div>
+    <div><label for="hour">Hour (0-23)</label><input id="hour" type="number" min="0" max="23" step="1" value="8"></div>
+  </div>
+
+  <label class="check"><input type="checkbox" id="customWeather"> Enter the weather myself (otherwise the recorded weather for that date is used)</label>
+  <div class="grid" id="weatherBox" hidden>
+    <div><label for="temperature_2m">Temperature (°C)</label><input id="temperature_2m" type="number" step="0.1" value="15"></div>
+    <div><label for="precipitation">Rain (mm/h)</label><input id="precipitation" type="number" step="0.1" value="0"></div>
+    <div><label for="snowfall">Snow (cm/h)</label><input id="snowfall" type="number" step="0.1" value="0"></div>
+    <div><label for="wind_speed_10m">Wind (km/h)</label><input id="wind_speed_10m" type="number" step="0.1" value="10"></div>
+  </div>
+
+  <button id="go" disabled>Predict</button>
+  <div id="error" role="alert"></div>
+</div>
+
+<div id="result" hidden>
+  <div class="sub" id="resultLabel"></div>
+  <div class="big" id="resultValue"></div>
+  <canvas id="chart" aria-label="Predicted riders for each hour of the day"></canvas>
+  <div class="sub">Predicted riders for every hour of that day; the chosen hour is highlighted.</div>
+</div>
+
+<footer>
+  <p><strong>Limits:</strong> the model only knows the 24 routes it was trained on and dates from 2025-01-06 to 2025-09-28.
+  Typical error on the test period was about 65 riders per route-hour (about 14.5% of an average hour).</p>
+  <p>Gradient Boosting model trained on MTA bus ridership, MTA schedules and Open-Meteo weather.
+  The same model runs here in your browser: its 500 trees were exported from scikit-learn, and the predictions were checked to match the Python model.</p>
+  <p><a href="https://huggingface.co/ayanjawed/transitpulse-planning-model">Model card</a> ·
+  <a href="https://github.com/ayanmirza99/ML-Project">Code</a> ·
+  <a href="https://ml-project-wuwhhjv3aqsnuxh5x5tdwi.streamlit.app/">Streamlit version</a> ·
+  CT-378 Machine Learning course project</p>
+</footer>
+
+<script src="predict.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const WEATHER_FIELDS = ["temperature_2m", "precipitation", "snowfall", "wind_speed_10m"];
+let model = null, data = null;
+
+function showError(message) {
+  $("error").textContent = message;
+  $("result").hidden = true;
+}
+
+function drawChart(profile, chosenHour) {
+  const canvas = $("chart");
+  const ratio = window.devicePixelRatio || 1;
+  const width = canvas.clientWidth, height = canvas.clientHeight;
+  canvas.width = width * ratio;
+  canvas.height = height * ratio;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(ratio, ratio);
+  const styles = getComputedStyle(document.documentElement);
+  const color = (name) => styles.getPropertyValue(name).trim();
+
+  const left = 44, bottom = 22, top = 8;
+  const plotHeight = height - bottom - top;
+  const max = Math.max(...profile.map((p) => p.predicted_riders), 1);
+  const slot = (width - left) / 24;
+
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.fillStyle = color("--muted");
+  ctx.strokeStyle = color("--line");
+  ctx.textAlign = "right";
+  [0, 0.5, 1].forEach((f) => {
+    const y = top + plotHeight * (1 - f);
+    ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(width, y); ctx.stroke();
+    ctx.fillText(Math.round(max * f).toLocaleString(), left - 6, y + 4);
+  });
+  ctx.textAlign = "center";
+  profile.forEach((p) => {
+    const h = (p.predicted_riders / max) * plotHeight;
+    ctx.fillStyle = p.hour === chosenHour ? color("--accent") : color("--bar");
+    ctx.fillRect(left + p.hour * slot + 2, top + plotHeight - h, Math.max(slot - 4, 1), h);
+    if (p.hour % 3 === 0) {
+      ctx.fillStyle = color("--muted");
+      ctx.fillText(String(p.hour), left + p.hour * slot + slot / 2, height - 6);
+    }
+  });
+}
+
+function predict() {
+  $("error").textContent = "";
+  const hourText = $("hour").value.trim();
+  const hour = /^-?\d+$/.test(hourText) ? Number(hourText) : NaN;
+  let weather = null;
+  if ($("customWeather").checked) {
+    weather = {};
+    for (const field of WEATHER_FIELDS) {
+      const text = $(field).value.trim();
+      weather[field] = text === "" ? NaN : Number(text);
+    }
+  }
+  try {
+    const result = TransitPulse.predictHour(model, data, $("route").value, $("date").value, hour, weather);
+    $("resultLabel").textContent = `Predicted riders on ${result.route} at ${result.hour}:00 on ${result.date}`;
+    $("resultValue").textContent = result.predicted_riders.toLocaleString();
+    $("result").hidden = false;
+    drawChart(result.daily_profile, result.hour);
+  } catch (error) {
+    showError(error instanceof TransitPulse.InputError ? error.message : "Something went wrong: " + error.message);
+  }
+}
+
+Promise.all([fetch("model.json"), fetch("data.json")])
+  .then((responses) => Promise.all(responses.map((r) => { if (!r.ok) throw new Error(r.statusText); return r.json(); })))
+  .then(([loadedModel, loadedData]) => {
+    model = loadedModel;
+    data = loadedData;
+    $("route").innerHTML = data.route_names.map((r) => `<option>${r}</option>`).join("");
+    $("route").value = data.route_names[0];
+    $("route").disabled = false;
+    $("date").min = data.first_date;
+    $("date").max = data.last_date;
+    $("date").value = data.default_date;
+    $("go").disabled = false;
+    predict();
+  })
+  .catch((error) => showError("Could not load the model files: " + error.message));
+
+$("customWeather").addEventListener("change", (e) => { $("weatherBox").hidden = !e.target.checked; });
+$("go").addEventListener("click", predict);
+window.addEventListener("resize", () => { if (!$("result").hidden) predict(); });
+</script>
+</body>
+</html>
