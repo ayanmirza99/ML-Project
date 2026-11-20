@@ -4,7 +4,7 @@
 //   1. one-hot encoding of bus_route and borough (the other 18 inputs pass through unchanged),
 //   2. a HistGradientBoostingRegressor with 500 trees.
 // app/build_hf_space.py exports that pipeline to model.json (the trees) and the lookup tables
-// (route facts, schedule, recorded weather, calendar) to data.json.
+// (route facts, schedule, recorded 2025 weather, calendar) to data.json.
 // This file rebuilds the input row exactly like app/features.py and adds up the trees exactly
 // like scikit-learn does. app/verify_static_space.py checks that the results are identical.
 // The same file runs in the browser (window.TransitPulse) and in Node.js (module.exports) for the check.
@@ -62,8 +62,10 @@
     return Number.isInteger(n) ? n.toFixed(1) : String(n);
   }
 
+  const has = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+
   function checkRoute(data, route) {
-    if (!Object.prototype.hasOwnProperty.call(data.routes, route)) {
+    if (!has(data.routes, route)) {
       throw new InputError(`Unknown route '${route}'. Choose one of: ${data.route_names.join(", ")}.`);
     }
   }
@@ -74,8 +76,8 @@
     if (!/^\d{4}-\d{2}-\d{2}$/.test(text) || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== text) {
       throw new InputError(`Date '${date}' is not valid. Use the format YYYY-MM-DD.`);
     }
-    if (!Object.prototype.hasOwnProperty.call(data.calendar, text)) {
-      throw new InputError(`Date must be between ${data.first_date} and ${data.last_date}, the period the model was trained on.`);
+    if (!has(data.calendar, text)) {
+      throw new InputError(`Date must be between ${data.first_date} and ${data.last_date}.`);
     }
     return text;
   }
@@ -91,7 +93,7 @@
     const clean = {};
     for (const [name, value] of Object.entries(weather || {})) {
       if (value === null || value === undefined) continue;
-      if (!Object.prototype.hasOwnProperty.call(data.weather_limits, name)) {
+      if (!has(data.weather_limits, name)) {
         throw new InputError(`Unknown weather field '${name}'. Allowed: ${Object.keys(data.weather_limits).join(", ")}.`);
       }
       const [low, high] = data.weather_limits[name];
@@ -103,17 +105,114 @@
     return clean;
   }
 
+  // ---- dates and weather (mirrors features.fetch_weather / day_weather / date_warnings) -----
+
+  const DAY_MS = 86400000;
+  const dayNumber = (text) => Date.parse(text + "T00:00:00Z") / DAY_MS;
+
+  function todayInNewYork() {
+    return new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" }); // YYYY-MM-DD
+  }
+
+  function addDays(text, days) {
+    return new Date(Date.parse(text + "T00:00:00Z") + days * DAY_MS).toISOString().slice(0, 10);
+  }
+
+  function defaultDate() {
+    return addDays(todayInNewYork(), 1);
+  }
+
+  const weatherCache = {};
+
+  // Hourly weather for a date after the saved 2025 file, from Open-Meteo (CC BY 4.0).
+  async function fetchWeather(data, date, today = todayInNewYork()) {
+    const cached = weatherCache[date];
+    if (cached && Date.now() - cached.time < 3600000) return cached.result;
+    const ow = data.open_meteo;
+    if (dayNumber(date) > dayNumber(today) + ow.forecast_days - 1) {
+      throw new InputError(`No weather forecast exists yet for ${date} (forecasts reach ${ow.forecast_days} days ahead). Enter the weather yourself.`);
+    }
+    const archive = dayNumber(date) < dayNumber(today) - ow.archive_delay_days;
+    const params = new URLSearchParams({
+      latitude: ow.latitude, longitude: ow.longitude, hourly: Object.keys(data.weather_limits).join(","),
+      timezone: "America/New_York", start_date: date, end_date: date,
+    });
+    const problem = new InputError(`Could not get the weather for ${date} from Open-Meteo. Try again, or enter the weather yourself.`);
+    let hourly;
+    try {
+      const response = await fetch(`${archive ? ow.archive_url : ow.forecast_url}?${params}`);
+      if (!response.ok) throw problem;
+      hourly = (await response.json()).hourly;
+      if (!hourly) throw problem;
+    } catch (error) {
+      throw problem;
+    }
+    const values = {};
+    for (const column of Object.keys(data.weather_limits)) {
+      const byHour = {};
+      (hourly[column] || []).forEach((value, i) => {
+        const stamp = hourly.time[i];
+        const hour = Number(stamp.slice(11, 13));
+        if (stamp.startsWith(date) && !(hour in byHour) && value !== null) byHour[hour] = value;
+      });
+      const known = Object.values(byHour);
+      if (known.length === 0) throw problem;
+      // a missing hour (for example when clocks change) takes the value of the hour before it, or after it at midnight
+      const series = [];
+      for (let hour = 0; hour < 24; hour++) series.push(hour in byHour ? byHour[hour] : null);
+      for (let hour = 0; hour < 24; hour++) {
+        if (series[hour] === null) series[hour] = hour > 0 ? series[hour - 1] : series.find((v) => v !== null);
+      }
+      values[column] = series;
+    }
+    const result = { values, source: archive ? "archive" : "forecast" };
+    weatherCache[date] = { time: Date.now(), result };
+    return result;
+  }
+
+  // 24 hourly values per weather column and where they came from. `fetched` is fetchWeather's result when it was needed.
+  function dayWeather(data, date, weather, fetched) {
+    const columns = Object.keys(data.weather_limits);
+    let base = null, source = null;
+    if (has(data.weather, date)) {
+      base = data.weather[date];
+      source = "recorded weather (Open-Meteo)";
+    } else if (!columns.every((c) => c in weather)) {
+      base = fetched.values;
+      source = fetched.source === "archive" ? "Open-Meteo historical weather" : "Open-Meteo forecast";
+    }
+    const out = {};
+    for (const c of columns) out[c] = c in weather ? Array(24).fill(weather[c]) : base[c];
+    if (Object.keys(weather).length === columns.length) source = "your weather";
+    else if (Object.keys(weather).length > 0) source += ", with your values where given";
+    return { columns: out, source };
+  }
+
+  function needsFetch(data, date, weather) {
+    return !has(data.weather, date) && !Object.keys(data.weather_limits).every((c) => c in weather);
+  }
+
+  function dateWarnings(data, date) {
+    const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September",
+      "October", "November", "December"];
+    const month = Number(date.slice(5, 7));
+    const warnings = [];
+    if (!data.trained_months.includes(month)) {
+      warnings.push(`The model never saw ${months[month - 1]} in training (it learned from January, February and April to September 2025), so treat this as a rough guess.`);
+    }
+    if (dayNumber(date) > dayNumber(data.last_recorded_date)) {
+      warnings.push("This date is after the training data (January to September 2025); bus service may have changed since then.");
+    }
+    return warnings;
+  }
+
   // ---- building the model's input rows (mirrors features.day_features) --------------------
 
-  function dayRows(data, route, date, weather) {
-    checkRoute(data, route);
-    const day = checkDate(data, date);
-    const chosenWeather = checkWeather(data, weather);
-
-    const calendar = data.calendar[day];
+  function dayRows(data, route, date, weather, fetched) {
+    const calendar = data.calendar[date];
     const dayType = calendar.day_of_week < 5 ? "weekday" : calendar.day_of_week === 5 ? "saturday" : "sunday";
     const schedule = data.schedule[route][dayType];
-    const recorded = data.weather[day];
+    const { columns, source } = dayWeather(data, date, weather, fetched);
 
     const rows = [];
     for (let hour = 0; hour < 24; hour++) {
@@ -131,29 +230,35 @@
       };
       Object.assign(row, data.routes[route]);
       data.schedule_columns.forEach((column, i) => { row[column] = schedule[hour][i]; });
-      for (const column of Object.keys(data.weather_limits)) {
-        row[column] = column in chosenWeather ? chosenWeather[column] : recorded[column][hour];
-      }
+      for (const column of Object.keys(columns)) row[column] = columns[column][hour];
       rows.push(row);
     }
-    return rows;
+    return { rows, source };
   }
 
-  // Predicted riders for each hour of the day: never below 0, rounded to whole riders.
-  function predictDay(model, data, route, date, weather) {
-    return dayRows(data, route, date, weather).map((row) => ({
-      hour: row.hour,
-      predicted_riders: roundHalfEven(Math.max(rawPredict(model, encode(model, row)), 0)),
-    }));
-  }
-
-  function predictHour(model, data, route, date, hour, weather) {
+  // Everything the page shows; same fields as features.predict. Checks run in the same order as the Python app.
+  async function predict(model, data, route, date, hour, weather, today = todayInNewYork()) {
     checkHour(hour);
-    const profile = predictDay(model, data, route, date, weather);
-    return { route, date, hour, predicted_riders: profile[hour].predicted_riders, daily_profile: profile };
+    checkRoute(data, route);
+    const day = checkDate(data, date);
+    const chosen = checkWeather(data, weather);
+    const fetched = needsFetch(data, day, chosen) ? await fetchWeather(data, day, today) : null;
+    const { rows, source } = dayRows(data, route, day, chosen, fetched);
+    const profile = rows.map((row) => roundHalfEven(Math.max(rawPredict(model, encode(model, row)), 0)));
+    const value = profile[hour];
+    return {
+      route, date: day, hour,
+      predicted_riders: value,
+      typical_error: data.typical_error,
+      likely_range: [Math.max(0, value - data.typical_error), value + data.typical_error],
+      daily_profile: profile.map((p, h) => ({ hour: h, predicted_riders: p })),
+      warnings: dateWarnings(data, day),
+      weather_source: source,
+    };
   }
 
-  const api = { InputError, treeValue, rawPredict, encode, roundHalfEven, dayRows, predictDay, predictHour };
+  const api = { InputError, treeValue, rawPredict, encode, roundHalfEven, dayRows, predict, fetchWeather,
+    todayInNewYork, defaultDate };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.TransitPulse = api;
 })(typeof window !== "undefined" ? window : globalThis);

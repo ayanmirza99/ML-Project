@@ -37,8 +37,9 @@ short_description: Hourly bus ridership predictions for 24 NYC bus routes
 
 # TransitPulse
 
-Predict hourly bus ridership for 24 MTA routes in New York (January to September 2025).
-Pick a route, a date and an hour; the page shows the predicted riders and the predicted profile for the whole day.
+Predict hourly bus ridership for 24 MTA routes in New York. Pick a route, a date and an hour; the page shows the
+predicted riders with a ± range and the predicted profile for the whole day. 2025 dates use recorded weather; later
+dates use Open-Meteo's forecast (16 days ahead) or weather you enter. Weather data by Open-Meteo.com (CC BY 4.0).
 
 This is a static Space: the Gradient Boosting model runs in your browser. Its 500 trees were exported from
 scikit-learn to `model.json`, and `predict.js` adds them up exactly like scikit-learn; the predictions were
@@ -68,8 +69,11 @@ route, date, hour, schedule and weather. Built for transport planners as a CT-37
 - Code, data builder and notebooks: https://github.com/ayanmirza99/ML-Project
 
 ## Intended use
-- What-if planning for the 24 MTA bus routes it was trained on, for dates from 2025-01-06 to 2025-09-28.
-- **Not** for other routes, other cities or dates outside that period (see Limitations).
+- What-if planning for the 24 MTA bus routes it was trained on. It was trained on January to September 2025;
+  the apps also accept later dates (up to 2027-06-30) with Open-Meteo forecast weather, but those are rough guesses,
+  especially for March and October to December, which the model never saw.
+- **Not** for other routes or other cities (see Limitations).
+- The apps show each prediction with a ± 56 riders range (the validation MAE).
 
 ## Model
 `sklearn.pipeline.Pipeline`: one-hot encoding of `bus_route` and `borough`, then `HistGradientBoostingRegressor`
@@ -83,7 +87,7 @@ is_holiday, is_school_day.
 1. **MTA Bus Hourly Ridership: Beginning 2025**, NY Open Data (dataset id `gxb3-akrn`), summed to one row per route per hour.
    Licence: the dataset page gives no licence information; it is covered by NY Open Data's terms of use.
 2. **MTA GTFS static bus schedules** (mta.info/developers). A 2026 snapshot, not the 2025 service that produced the ridership.
-3. **Open-Meteo historical weather** (New York City coordinates, one value per hour for the whole city).
+3. **Open-Meteo historical weather** (New York City coordinates, one value per hour for the whole city). Licence: CC BY 4.0. Weather data by Open-Meteo.com.
 4. US federal holidays (Python `holidays` package) and a hand-typed, approximate NYC school calendar.
 
 Eight two-week windows between January and September 2025, 24 routes, 64,512 route-hour rows. Missing hours are filled with 0 riders.
@@ -153,14 +157,13 @@ def export_data():
     route_info = features.routes.reset_index()
     schedule_columns = list(features.schedule.columns)
     first_route = features.ROUTES[0]
-    calendar, weather = {}, {}
-    hour_sin = hour_cos = None
-    for day in pd.date_range(features.FIRST_DATE, features.LAST_DATE):
+    # calendar for every accepted date; weather only for the saved 2025 dates (later dates are fetched from Open-Meteo)
+    calendar = {str(day.date()): features.calendar_info(day) for day in pd.date_range(features.FIRST_DATE, features.LAST_DATE)}
+    weather = {}
+    for day in pd.date_range(features.FIRST_DATE, features.LAST_RECORDED_DATE):
         rows = features.day_features(first_route, day)
-        key = str(day.date())
-        calendar[key] = {column: int(rows[column].iloc[0]) for column in ("day_of_week", "is_holiday", "is_school_day")}
-        weather[key] = {column: rows[column].astype(float).tolist() for column in features.WEATHER_LIMITS}
-        hour_sin, hour_cos = rows["hour_sin"].tolist(), rows["hour_cos"].tolist()
+        weather[str(day.date())] = {column: rows[column].astype(float).tolist() for column in features.WEATHER_LIMITS}
+    hour_sin, hour_cos = rows["hour_sin"].tolist(), rows["hour_cos"].tolist()
     schedule = {
         route: {day_type: features.schedule.loc[route, day_type].sort_index()[schedule_columns].to_numpy().tolist()
                 for day_type in ("weekday", "saturday", "sunday")}
@@ -179,7 +182,12 @@ def export_data():
         "hour_cos": hour_cos,
         "first_date": str(features.FIRST_DATE.date()),
         "last_date": str(features.LAST_DATE.date()),
-        "default_date": str(features.DEFAULT_DATE.date()),
+        "last_recorded_date": str(features.LAST_RECORDED_DATE.date()),
+        "trained_months": sorted(features.TRAINED_MONTHS),
+        "typical_error": features.TYPICAL_ERROR,
+        "open_meteo": {"latitude": features.LATITUDE, "longitude": features.LONGITUDE,
+                       "forecast_url": features.FORECAST_URL, "archive_url": features.ARCHIVE_URL,
+                       "forecast_days": features.FORECAST_DAYS, "archive_delay_days": features.ARCHIVE_DELAY_DAYS},
     }
 
 

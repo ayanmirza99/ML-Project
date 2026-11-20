@@ -26,7 +26,7 @@ def health():
 @app.get("/routes")
 def routes():
     return {"routes": features.ROUTES, "first_date": str(features.FIRST_DATE.date()), "last_date": str(features.LAST_DATE.date()),
-            "default_date": str(features.DEFAULT_DATE.date())}
+            "default_date": str(features.default_date().date()), "typical_error": features.TYPICAL_ERROR}
 
 
 @app.post("/predict")
@@ -43,15 +43,7 @@ async def predict(request: Request):
         return JSONResponse({"error": f"Missing field(s): {', '.join(missing)}."}, status_code=400)
 
     try:
-        hour = features.check_hour(body["hour"])
-        day = features.predict_day(model, body["route"], body["date"], body.get("weather"))
+        # predicted_riders, likely_range (± typical_error), daily_profile, warnings, weather_source
+        return features.predict(model, body["route"], body["date"], body["hour"], body.get("weather"))
     except features.InputError as error:
         return JSONResponse({"error": str(error)}, status_code=400)
-
-    return {
-        "route": body["route"],
-        "date": body["date"],
-        "hour": hour,
-        "predicted_riders": int(day.loc[day["hour"] == hour, "predicted_riders"].iloc[0]),
-        "daily_profile": day.to_dict(orient="records"),
-    }

@@ -27,6 +27,7 @@
   .big { font-size: 2.4rem; font-weight: 700; line-height: 1.1; }
   .sub { color: var(--muted); }
   canvas { display: block; width: 100%; height: 260px; margin-top: 1rem; }
+  .warn { margin-top: 0.6rem; padding: 0.5rem 0.75rem; border-left: 4px solid var(--accent); background: var(--panel); }
   footer { margin-top: 2rem; font-size: 0.9rem; color: var(--muted); }
   a { color: var(--accent); }
 </style>
@@ -44,7 +45,7 @@
     <div><label for="hour">Hour (0-23)</label><input id="hour" type="number" min="0" max="23" step="1" value="8"></div>
   </div>
 
-  <label class="check"><input type="checkbox" id="customWeather"> Enter the weather myself (otherwise the recorded weather for that date is used)</label>
+  <label class="check"><input type="checkbox" id="customWeather"> Enter the weather myself (otherwise: recorded weather, or Open-Meteo's forecast for the next 16 days)</label>
   <div class="grid" id="weatherBox" hidden>
     <div><label for="temperature_2m">Temperature (°C)</label><input id="temperature_2m" type="number" step="0.1" value="15"></div>
     <div><label for="precipitation">Rain (mm/h)</label><input id="precipitation" type="number" step="0.1" value="0"></div>
@@ -59,13 +60,17 @@
 <div id="result" hidden>
   <div class="sub" id="resultLabel"></div>
   <div class="big" id="resultValue"></div>
+  <div class="sub" id="resultRange"></div>
+  <div id="warnings"></div>
   <canvas id="chart" aria-label="Predicted riders for each hour of the day"></canvas>
   <div class="sub">Predicted riders for every hour of that day; the chosen hour is highlighted.</div>
 </div>
 
 <footer>
-  <p><strong>Limits:</strong> the model only knows the 24 routes it was trained on and dates from 2025-01-06 to 2025-09-28.
-  Typical error on the test period was about 65 riders per route-hour (about 14.5% of an average hour).</p>
+  <p><strong>Limits:</strong> the model only knows the 24 routes it was trained on, and it learned from January to September 2025.
+  Later dates use Open-Meteo weather (forecasts reach 16 days ahead) and are rough guesses, especially for March and October to December, which the model never saw.
+  Typical error on the test period was about 65 riders per route-hour (about 14.5% of an average hour); the ± range uses the validation error (56 riders).
+  Weather data by <a href="https://open-meteo.com/">Open-Meteo.com</a> (CC BY 4.0).</p>
   <p>Gradient Boosting model trained on MTA bus ridership, MTA schedules and Open-Meteo weather.
   The same model runs here in your browser: its 500 trees were exported from scikit-learn, and the predictions were checked to match the Python model.</p>
   <p><a href="https://huggingface.co/ayanjawed/transitpulse-planning-model">Model card</a> ·
@@ -122,7 +127,7 @@ function drawChart(profile, chosenHour) {
   });
 }
 
-function predict() {
+async function predict() {
   $("error").textContent = "";
   const hourText = $("hour").value.trim();
   const hour = /^-?\d+$/.test(hourText) ? Number(hourText) : NaN;
@@ -135,13 +140,24 @@ function predict() {
     }
   }
   try {
-    const result = TransitPulse.predictHour(model, data, $("route").value, $("date").value, hour, weather);
+    $("go").disabled = true;
+    const result = await TransitPulse.predict(model, data, $("route").value, $("date").value, hour, weather);
     $("resultLabel").textContent = `Predicted riders on ${result.route} at ${result.hour}:00 on ${result.date}`;
-    $("resultValue").textContent = result.predicted_riders.toLocaleString();
+    $("resultValue").textContent = `${result.predicted_riders.toLocaleString()} ± ${result.typical_error}`;
+    $("resultRange").textContent = `Likely between ${result.likely_range[0].toLocaleString()} and ${result.likely_range[1].toLocaleString()} riders. Weather used: ${result.weather_source}.`;
+    $("warnings").innerHTML = "";
+    for (const text of result.warnings) {
+      const box = document.createElement("div");
+      box.className = "warn";
+      box.textContent = text;
+      $("warnings").appendChild(box);
+    }
     $("result").hidden = false;
     drawChart(result.daily_profile, result.hour);
   } catch (error) {
     showError(error instanceof TransitPulse.InputError ? error.message : "Something went wrong: " + error.message);
+  } finally {
+    $("go").disabled = false;
   }
 }
 
@@ -155,7 +171,7 @@ Promise.all([fetch("model.json"), fetch("data.json")])
     $("route").disabled = false;
     $("date").min = data.first_date;
     $("date").max = data.last_date;
-    $("date").value = data.default_date;
+    $("date").value = TransitPulse.defaultDate();
     $("go").disabled = false;
     predict();
   })

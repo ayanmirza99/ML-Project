@@ -60,7 +60,11 @@ curl -X POST localhost:8000/predict -H "Content-Type: application/json" \
   -d '{"route": "M15+", "date": "2025-09-23", "hour": 8}'
 ```
 Optional `"weather": {"temperature_2m": 15, "precipitation": 0, "snowfall": 0, "wind_speed_10m": 10}`.
-Invalid input returns HTTP 400 with an `error` message. Valid dates: 2025-01-06 to 2025-09-28; valid routes: the 24 in `app/lookup/routes.csv`.
+Invalid input returns HTTP 400 with an `error` message. Valid routes: the 24 in `app/lookup/routes.csv`.
+Valid dates: 2025-01-06 to 2027-06-30. 2025 dates (to 2025-09-28) use the recorded weather; later dates get Open-Meteo weather
+(archive for past days, forecast up to 16 days ahead) unless all four weather values are given. Every answer includes
+`predicted_riders`, `likely_range` (± `typical_error` = 56, the validation MAE), `daily_profile`, `warnings`
+(for months the model never saw and dates after the training data) and `weather_source`. Weather data by Open-Meteo.com (CC BY 4.0).
 
 Streamlit app:
 ```bash

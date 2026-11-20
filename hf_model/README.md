@@ -17,8 +17,11 @@ route, date, hour, schedule and weather. Built for transport planners as a CT-37
 - Code, data builder and notebooks: https://github.com/ayanmirza99/ML-Project
 
 ## Intended use
-- What-if planning for the 24 MTA bus routes it was trained on, for dates from 2025-01-06 to 2025-09-28.
-- **Not** for other routes, other cities or dates outside that period (see Limitations).
+- What-if planning for the 24 MTA bus routes it was trained on. It was trained on January to September 2025;
+  the apps also accept later dates (up to 2027-06-30) with Open-Meteo forecast weather, but those are rough guesses,
+  especially for March and October to December, which the model never saw.
+- **Not** for other routes or other cities (see Limitations).
+- The apps show each prediction with a ± 56 riders range (the validation MAE).
 
 ## Model
 `sklearn.pipeline.Pipeline`: one-hot encoding of `bus_route` and `borough`, then `HistGradientBoostingRegressor`
@@ -32,7 +35,7 @@ is_holiday, is_school_day.
 1. **MTA Bus Hourly Ridership: Beginning 2025**, NY Open Data (dataset id `gxb3-akrn`), summed to one row per route per hour.
    Licence: the dataset page gives no licence information; it is covered by NY Open Data's terms of use.
 2. **MTA GTFS static bus schedules** (mta.info/developers). A 2026 snapshot, not the 2025 service that produced the ridership.
-3. **Open-Meteo historical weather** (New York City coordinates, one value per hour for the whole city).
+3. **Open-Meteo historical weather** (New York City coordinates, one value per hour for the whole city). Licence: CC BY 4.0. Weather data by Open-Meteo.com.
 4. US federal holidays (Python `holidays` package) and a hand-typed, approximate NYC school calendar.
 
 Eight two-week windows between January and September 2025, 24 routes, 64,512 route-hour rows. Missing hours are filled with 0 riders.
