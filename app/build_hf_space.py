@@ -6,14 +6,16 @@ APP = ROOT / "app"
 SPACE = ROOT / "hf_space"
 MODEL_REPO = ROOT / "hf_model"
 
+# Hugging Face retired the built-in Streamlit SDK on 2025-04-30, so the Space runs Streamlit inside Docker.
 SPACE_README = """---
 title: TransitPulse
 emoji: 🚌
 colorFrom: blue
 colorTo: indigo
-sdk: streamlit
-sdk_version: 1.67.0
-app_file: app.py
+sdk: docker
+app_port: 8501
+tags:
+  - streamlit
 pinned: false
 ---
 
@@ -31,6 +33,23 @@ numpy==2.5.4
 scikit-learn==1.9.1
 joblib==1.6.0
 holidays==0.108
+"""
+
+# Python 3.14 matches the local .venv the app was tested with (numpy 2.5 needs Python 3.12 or newer).
+# Spaces run the container as user 1000, so the app gets its own home folder (Streamlit writes ~/.streamlit).
+SPACE_DOCKERFILE = """FROM python:3.14-slim
+
+RUN useradd -m -u 1000 user
+USER user
+ENV HOME=/home/user PATH=/home/user/.local/bin:$PATH
+WORKDIR /home/user/app
+
+COPY --chown=user requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY --chown=user . .
+
+EXPOSE 8501
+CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0", "--browser.gatherUsageStats=false"]
 """
 
 MODEL_CARD = """---
@@ -109,6 +128,7 @@ shutil.copytree(APP / "lookup", SPACE / "lookup")
 shutil.copy(ROOT / "models" / "planning_model.joblib", SPACE / "planning_model.joblib")
 (SPACE / "README.md").write_text(SPACE_README, encoding="utf-8")
 (SPACE / "requirements.txt").write_text(SPACE_REQUIREMENTS, encoding="utf-8")
+(SPACE / "Dockerfile").write_text(SPACE_DOCKERFILE, encoding="utf-8")
 
 shutil.copy(ROOT / "models" / "planning_model.joblib", MODEL_REPO / "planning_model.joblib")
 (MODEL_REPO / "README.md").write_text(MODEL_CARD, encoding="utf-8")

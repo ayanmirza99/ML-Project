@@ -3,9 +3,10 @@ title: TransitPulse
 emoji: 🚌
 colorFrom: blue
 colorTo: indigo
-sdk: streamlit
-sdk_version: 1.67.0
-app_file: app.py
+sdk: docker
+app_port: 8501
+tags:
+  - streamlit
 pinned: false
 ---
 
